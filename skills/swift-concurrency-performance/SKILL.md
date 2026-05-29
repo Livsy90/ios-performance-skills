@@ -2,7 +2,7 @@
 
 name: swift-concurrency-performance
 description: Use this skill when reviewing or diagnosing Swift Concurrency code for performance, responsiveness, MainActor overuse, actor contention, task lifecycle bugs, unbounded child tasks, blocking work inside async contexts, cancellation propagation, AsyncSequence resource cleanup, continuation safety, Swift 6.2 isolation behavior, or Swift Concurrency Instruments findings.
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+---
 
 # Swift Concurrency Performance
 
