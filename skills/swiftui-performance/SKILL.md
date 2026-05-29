@@ -1,6 +1,8 @@
 ---
 
-## description: SwiftUI performance review and refactoring skill focused on code composition, invalidation scope, view identity, state ownership, Observation and ObservableObject granularity, list and pagination performance, closure-heavy views, bindings, layout cost, drawing cost, async lifecycle work, and profiling validation with Instruments, xctrace, signposts, XCTest, and MetricKit. Use when reviewing SwiftUI screens for unnecessary updates, slow scrolling, heavy rows, broad state dependencies, unstable identity, animation hitches, or performance-sensitive UI architecture.
+name: swiftui-performance
+description: SwiftUI performance review and refactoring skill focused on code composition, invalidation scope, view identity, state ownership, Observation and ObservableObject granularity, list and pagination performance, closure-heavy views, bindings, layout cost, drawing cost, async lifecycle work, and profiling validation with Instruments, xctrace, signposts, XCTest, and MetricKit. Use when reviewing SwiftUI screens for unnecessary updates, slow scrolling, heavy rows, broad state dependencies, unstable identity, animation hitches, or performance-sensitive UI architecture.
+---
 
 # SwiftUI Performance: Code Composition and Profiling
 
