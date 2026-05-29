@@ -2,6 +2,7 @@
 
 name: swift-concurrency-performance
 description: Use this skill when reviewing or diagnosing Swift Concurrency code for performance, responsiveness, MainActor overuse, actor contention, task lifecycle bugs, unbounded child tasks, blocking work inside async contexts, cancellation propagation, AsyncSequence resource cleanup, continuation safety, Swift 6.2 isolation behavior, or Swift Concurrency Instruments findings.
+
 ---
 
 # Swift Concurrency Performance
@@ -33,6 +34,14 @@ Before proposing a rewrite, classify the issue:
 * Swift 6.2 isolation behavior keeping work on the caller’s actor
 
 When possible, ask for evidence: Instruments trace, logs, reproducible scenario, cancellation path, affected screen, or the specific async call chain.
+
+## References
+
+Read these only when the task requires deeper guidance:
+
+* `references/actor-reentrancy.md` — actor methods with `await`, cache coordination, duplicate work, state validation after suspension, in-flight tasks, or actor contention.
+* `references/bounded-task-groups.md` — task groups over large collections, batch processing, dynamic child tasks, ordering, throttling, cancellation, partial failure, or concurrency limit selection.
+* `references/swift-6-2-isolation.md` — Swift 6.2+, `@MainActor`, default actor isolation, `nonisolated`, `@concurrent`, Sendable boundary checks, snapshots, or CPU work that may stay on the caller’s actor.
 
 ## Runtime Rule: Suspend, Do Not Block
 
@@ -120,6 +129,8 @@ Avoid `DispatchQueue.main.async` from code that is already isolated to `MainActo
 
 Use `MainActor.run` when only a small section of otherwise non-main work must update UI state.
 
+For deeper Swift 6.2 isolation behavior, read `references/swift-6-2-isolation.md`.
+
 ## Structured Concurrency by Default
 
 Prefer structured concurrency when the child work belongs to the caller’s scope.
@@ -196,31 +207,9 @@ This may create excessive memory pressure, scheduling overhead, or service load 
 
 For large input collections, recommend bounded concurrency: start only a limited number of child tasks, then add a new task each time one completes.
 
-```swift
-let limit = 4
-var pending = scans.makeIterator()
-
-try await withThrowingTaskGroup(of: ReceiptText.self) { group in
-    for _ in 0..<limit {
-        guard let scan = pending.next() else { break }
-        group.addTask {
-            try await recognizeText(in: scan)
-        }
-    }
-
-    while let text = try await group.next() {
-        recognizedTexts.append(text)
-
-        if let scan = pending.next() {
-            group.addTask {
-                try await recognizeText(in: scan)
-            }
-        }
-    }
-}
-```
-
 Use bounded concurrency for batch uploads, downloads, image processing, OCR, parsing, indexing, compression, and other large collections.
+
+For full bounded-concurrency patterns, ordering, cancellation, partial failure, and limit selection, read `references/bounded-task-groups.md`.
 
 ## Cancellation
 
@@ -271,152 +260,29 @@ Actors protect isolated state from data races. They do not make an entire async 
 
 Every `await` inside an actor-isolated method is a reentrancy boundary. While the method is suspended, another call can enter the actor and observe or mutate actor state.
 
-Risky cache coordination:
+Watch for:
 
-```swift
-actor AvatarRepository {
-    private var memory: [UserID: Avatar] = [:]
+* cache miss followed by `await`
+* state validation before `await`
+* mutation after `await`
+* duplicate network, decoding, parsing, or indexing work
+* actor methods that combine coordination and expensive work
+* hot actor methods called once per item in a large loop
 
-    func avatar(for userID: UserID) async throws -> Avatar {
-        if let cached = memory[userID] {
-            return cached
-        }
+Prefer:
 
-        let avatar = try await remoteAvatarService.loadAvatar(for: userID)
-        memory[userID] = avatar
-        return avatar
-    }
-}
-```
+* committing actor state before suspension when correct
+* re-validating actor state after suspension when needed
+* tracking in-flight work when deduplication matters
+* batching hot actor calls
+* moving pure computation to `nonisolated` code
+* reducing the isolated section instead of making the whole workflow actor-isolated
 
-This has no data race, but it has a reentrancy window. If two callers request the same missing avatar, both can observe the cache miss before either stores the result. That can produce duplicate network and decoding work.
-
-Prefer tracking in-flight work when deduplication matters:
-
-```swift
-actor AvatarRepository {
-    private var memory: [UserID: Avatar] = [:]
-    private var loading: [UserID: Task<Avatar, Error>] = [:]
-
-    func avatar(for userID: UserID) async throws -> Avatar {
-        if let cached = memory[userID] {
-            return cached
-        }
-
-        if let existing = loading[userID] {
-            return try await existing.value
-        }
-
-        let job = Task {
-            try await remoteAvatarService.loadAvatar(for: userID)
-        }
-
-        loading[userID] = job
-
-        do {
-            let avatar = try await job.value
-            memory[userID] = avatar
-            loading[userID] = nil
-            return avatar
-        } catch {
-            loading[userID] = nil
-            throw error
-        }
-    }
-}
-```
-
-This still suspends at `await`, but the actor state now records the in-flight task before suspension, so later callers reuse the same work.
-
-Also check for state assumptions across `await`.
-
-Risky:
-
-```swift
-actor UploadBudget {
-    private var remainingBytes: Int
-
-    func reserve(bytes: Int) async throws {
-        guard remainingBytes >= bytes else {
-            throw UploadBudgetError.exceeded
-        }
-
-        await analytics.trackReservation(bytes)
-
-        remainingBytes -= bytes
-    }
-}
-```
-
-The value can change while the method is suspended.
-
-Prefer committing the state change before suspension when that matches the business rule:
-
-```swift
-actor UploadBudget {
-    private var remainingBytes: Int
-
-    func reserve(bytes: Int) async throws {
-        guard remainingBytes >= bytes else {
-            throw UploadBudgetError.exceeded
-        }
-
-        remainingBytes -= bytes
-
-        await analytics.trackReservation(bytes)
-    }
-}
-```
-
-If the state cannot be changed before the await, re-read and re-validate after suspension.
-
-## Actor Contention and Actor Hops
-
-An actor can become a serial bottleneck when many tasks repeatedly call it.
-
-Look for:
-
-* hot methods called once per item in a large loop
-* actor methods that do not need actor-isolated state
-* many small actor calls instead of one batched call
-* expensive work mixed with protected state access
-* actor used as a logging, metrics, or formatting funnel
-
-Risky:
-
-```swift
-for quote in quotes {
-    await priceStore.record(quote)
-}
-```
-
-If this is a hot path, prefer batching:
-
-```swift
-await priceStore.recordBatch(quotes)
-```
-
-Move pure computation out of actor isolation:
-
-```swift
-actor PriceStore {
-    private var latest: [Symbol: Price] = [:]
-
-    func update(_ prices: [Price]) {
-        for price in prices {
-            latest[price.symbol] = price
-        }
-    }
-
-    nonisolated func normalize(_ raw: RawPrice) -> Price {
-        Price(raw)
-    }
-}
-```
-
-Use `nonisolated` only when the method does not read or mutate actor-isolated state.
+Use `nonisolated` only when a method does not read or mutate actor-isolated state.
 
 Do not split state into many actors just to increase parallelism unless the split matches the consistency model. Too many actors can create excessive hops and make correctness harder to reason about.
+
+For detailed reentrancy examples, in-flight task patterns, state validation, and actor contention guidance, read `references/actor-reentrancy.md`.
 
 ## Swift 6.2 and Explicit Isolation
 
@@ -434,42 +300,11 @@ Use `nonisolated` for code that does not need actor-isolated state.
 
 Use `@concurrent` when an async function should explicitly switch off the caller’s actor so that actor can continue making progress.
 
-Risky:
-
-```swift
-@MainActor
-final class StatementScreenModel {
-    private(set) var statement: Statement?
-
-    func rebuildStatement(from entries: [LedgerEntry]) async {
-        statement = StatementCompiler.compile(entries)
-    }
-}
-```
-
-The expensive compile step is tied to the main actor.
-
-Prefer:
-
-```swift
-@MainActor
-final class StatementScreenModel {
-    private(set) var statement: Statement?
-
-    func rebuildStatement(from entries: [LedgerEntry]) async {
-        statement = await compileStatement(from: entries)
-    }
-}
-
-@concurrent
-func compileStatement(from entries: [LedgerEntry]) async -> Statement {
-    StatementCompiler.compile(entries)
-}
-```
-
-Before recommending this, verify that `LedgerEntry` and `Statement` can safely cross the isolation boundary. Prefer value types that conform to `Sendable`.
+Before recommending `@concurrent`, verify that parameters, captures, and return values can safely cross isolation boundaries. Prefer value types that conform to `Sendable`.
 
 Do not add `@concurrent` everywhere. Use it when there is a concrete isolation or responsiveness problem.
+
+For detailed Swift 6.2 behavior, Sendable boundary checks, snapshots, and refactoring patterns, read `references/swift-6-2-isolation.md`.
 
 ## Blocking Legacy APIs
 
