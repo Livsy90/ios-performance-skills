@@ -1,8 +1,6 @@
 ---
-
 name: swift-runtime-performance
 description: Use this skill when reviewing Swift code for runtime internals and performance trade-offs: allocation, ARC traffic, stack vs heap behavior, method dispatch, protocol witness tables, existentials vs generics, opaque types, copy-on-write, structured concurrency, actor/task overhead, SIL optimizer behavior, unsafe Swift, modularization, linking, launch time, or build-time/runtime trade-offs.
-
 ---
 
 # Swift Runtime Performance Expert
