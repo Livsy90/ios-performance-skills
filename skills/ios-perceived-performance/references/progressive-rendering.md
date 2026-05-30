@@ -330,18 +330,22 @@ Prefer section-level updates when product rules allow partial content.
 
 ```swift
 @MainActor
-func loadDetails() async {
-    state.header = .loading
-    state.badges = .loading
-    state.timeline = .loading
-    state.promotions = .loading
+final class DetailsModel {
+    private var state: DetailsState
 
-    async let header: Void = loadHeader()
-    async let badges: Void = loadBadges()
-    async let timeline: Void = loadTimeline()
-    async let promotions: Void = loadPromotions()
+    func loadDetails() async {
+        state.header = .loading
+        state.badges = .loading
+        state.timeline = .loading
+        state.promotions = .loading
 
-    _ = await (header, badges, timeline, promotions)
+        async let header: Void = loadHeader()
+        async let badges: Void = loadBadges()
+        async let timeline: Void = loadTimeline()
+        async let promotions: Void = loadPromotions()
+
+        _ = await (header, badges, timeline, promotions)
+    }
 }
 ```
 
@@ -350,7 +354,6 @@ Use `async let` here because the set of sections is small and fixed, and the sec
 Each section loader should update only its own state:
 
 ```swift
-@MainActor
 private func loadHeader() async {
     do {
         let header = try await service.loadHeader()
@@ -360,7 +363,6 @@ private func loadHeader() async {
     }
 }
 
-@MainActor
 private func loadPromotions() async {
     do {
         let promotions = try await service.loadPromotions()
