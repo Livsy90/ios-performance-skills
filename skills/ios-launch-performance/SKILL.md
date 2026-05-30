@@ -1,6 +1,7 @@
 ---
+
 name: ios-launch-performance
-description: Use this skill when reviewing or diagnosing iOS app launch performance, including cold launch, warm launch, prewarmed launch, resume-vs-launch confusion, dyld and pre-main work, Objective-C +load/+initialize, static initializers, static vs dynamic linking, mergeable libraries, AppDelegate/SceneDelegate startup, SwiftUI App initialization, first-frame readiness, MetricKit, XCTest launch metrics, and Instruments App Launch traces. Trigger when reviewing AppDelegate, SceneDelegate, SwiftUI @main App, root view creation, dependency container setup, third-party SDK initialization, framework linking strategy, Objective-C runtime hooks, constructor functions, or slow launch symptoms caused by pre-main or main-thread startup work.
+description: Use this skill when reviewing or diagnosing iOS app launch performance, including cold launch, warm launch, prewarmed launch, resume-vs-launch confusion, dyld and pre-main work, Objective-C +load/+initialize, static initializers, static vs dynamic linking, mergeable libraries, AppDelegate/SceneDelegate startup, SwiftUI App initialization, launch orchestration, dependency graphs, first-frame readiness, MetricKit, XCTest launch metrics, and Instruments App Launch traces. Trigger when reviewing AppDelegate, SceneDelegate, SwiftUI @main App, root view creation, dependency container setup, launch step ordering, third-party SDK initialization, framework linking strategy, Objective-C runtime hooks, constructor functions, or slow launch symptoms caused by pre-main or main-thread startup work.
 ---
 
 # iOS Launch Performance Expert
@@ -17,90 +18,122 @@ Treat launch as a pipeline with separate phases:
 2. dyld loading, binding, fixups, runtime registration, and static initialization
 3. UIKit or SwiftUI runtime startup
 4. App-level initialization in `UIApplicationDelegate`, `UISceneDelegate`, or SwiftUI `App`
-5. Root UI construction, layout, drawing, and first frame commit
-6. Early post-launch work that affects responsiveness
-7. Later feature-specific or maintenance work
+5. Launch orchestration and dependency setup
+6. Root UI construction, layout, drawing, and first frame commit
+7. Early post-launch work that affects responsiveness
+8. Later feature-specific or maintenance work
 
-Do not optimize blindly. First identify which phase is expensive, then recommend changes that move, remove, lazy-load, parallelize, or measure that specific work.
+Do not optimize blindly. First identify which phase is expensive, then recommend changes that move, remove, lazy-load, parallelize, serialize, or measure that specific work.
 
 ## Launch Scenario Classification
 
 Before giving advice, classify what is being measured:
 
-- **Cold launch**: the app process is not resident and little launch-related state is already warm.
-- **Warm launch**: the app still starts a new process, but parts of system state, caches, or pages may already be warm.
-- **Prewarmed launch**: the system may have prepared part of the launch path before the user explicitly opens the app.
-- **Resume / already-running return**: the app process already exists and returns from background or suspension.
-- **Unknown**: the measurement setup does not clearly separate the above cases.
+* **Cold launch**: the app process is not resident and little launch-related state is already warm.
+* **Warm launch**: the app still starts a new process, but parts of system state, caches, or pages may already be warm.
+* **Prewarmed launch**: the system may have prepared part of the launch path before the user explicitly opens the app.
+* **Resume / already-running return**: the app process already exists and returns from background or suspension.
+* **First install / first run / update launch**: launch includes extra setup such as migrations, cache creation, permissions, or account/bootstrap work.
+* **Unknown**: the measurement setup does not clearly separate the above cases.
 
-Do not compare cold launch, warm launch, prewarmed launch, and resume as one metric. Resume is not a full launch investigation unless the task explicitly asks about foregrounding latency.
+Do not compare cold launch, warm launch, prewarmed launch, first-run launch, update launch, and resume as one metric. Resume is not a full launch investigation unless the task explicitly asks about foregrounding latency.
 
 ## Investigation Workflow
 
 1. **Locate the launch path**
-   - Identify code that executes before first frame or before first interaction.
-   - Include app delegate, scene delegate, SwiftUI `App`, root view/model creation, dependency container setup, global/static initialization, SDK startup, and linked framework initialization.
+
+   Identify code that executes before first frame or before first interaction.
+
+   Include app delegate, scene delegate, SwiftUI `App`, root view/model creation, dependency container setup, global/static initialization, launch orchestrators, SDK startup, and linked framework initialization.
 
 2. **Classify the slow phase**
-   - dyld/pre-main
-   - Objective-C or Swift runtime/static initialization
-   - app delegate or scene delegate startup
-   - SwiftUI app/root view initialization
-   - root UI construction and first frame
-   - early post-launch responsiveness
-   - measurement ambiguity
+
+   * dyld/pre-main
+   * Objective-C or Swift runtime/static initialization
+   * app delegate or scene delegate startup
+   * SwiftUI app/root view initialization
+   * launch orchestration or dependency setup
+   * root UI construction and first frame
+   * early post-launch responsiveness
+   * measurement ambiguity
 
 3. **Classify each startup task by necessity**
-   - Required before first frame
-   - Required before first interaction
-   - Needed soon after launch
-   - Needed only after authentication/session state is known
-   - Needed only by a later feature
-   - Background maintenance
 
-4. **Look for hidden eager work**
-   - Objective-C `+load`
-   - C/C++ constructor functions
-   - static/global initialization with side effects
-   - eager singleton creation
-   - dependency graph construction
-   - dynamic framework startup cost
-   - SDK initialization
-   - synchronous file I/O
-   - database opening or migration
-   - keychain-heavy work
-   - networking or remote configuration
-   - large decoding/parsing
-   - blocking locks or semaphores on the main thread
+   * Required before first frame
+   * Required before first interaction
+   * Needed soon after launch
+   * Needed only after authentication/session state is known
+   * Needed only by a later feature
+   * Background maintenance
 
-5. **Recommend targeted changes**
-   - Remove unnecessary launch work.
-   - Lazy-load feature-specific services.
-   - Defer noncritical work until after visible UI or first interaction.
-   - Move blocking work off the main thread only when it is safe and useful.
-   - Split launch-critical state from secondary state.
-   - Replace hidden static initialization with explicit or lazy initialization.
-   - Review linking strategy only when evidence points to pre-main or dyld cost.
+4. **Build a dependency view when launch has ordered steps**
 
-6. **Require validation**
-   - Use Instruments for local diagnosis.
-   - Use XCTest launch metrics for repeatable regression checks.
-   - Use MetricKit or Xcode Organizer for production distributions.
-   - Prefer release-like builds, real devices, stable test data, and older supported hardware.
+   If the launch path contains a sequence of startup steps, SDK setup calls, service registrations, or a launch orchestrator, identify:
+
+   * which steps are truly required for the first visible UI
+   * which steps are required before the first meaningful interaction
+   * which steps can run independently
+   * which steps must stay ordered
+   * which steps touch the main thread or shared mutable state
+   * which failures must block launch
+   * which dependency chain forms the longest critical path
+
+   Treat comments, fragile ordering, and institutional knowledge as risk. Prefer explicit dependencies over relying on call order.
+
+5. **Look for hidden eager work**
+
+   * Objective-C `+load`
+   * C/C++ constructor functions
+   * static/global initialization with side effects
+   * eager singleton creation
+   * dependency graph construction
+   * dynamic framework startup cost
+   * SDK initialization
+   * synchronous file I/O
+   * database opening or migration
+   * keychain-heavy work
+   * networking or remote configuration
+   * large decoding/parsing
+   * blocking locks, semaphores, dispatch groups, or synchronous waits on the main thread
+
+6. **Recommend targeted changes**
+
+   * Remove unnecessary launch work.
+   * Lazy-load feature-specific services.
+   * Defer noncritical work until after visible UI or first interaction.
+   * Split the launch-critical path from secondary setup.
+   * Make launch step dependencies explicit before introducing parallelism.
+   * Move blocking work off the main thread only when it is safe and useful.
+   * Use bounded parallelism only after auditing dependencies, shared state, and failure behavior.
+   * Split launch-critical state from secondary app state.
+   * Replace hidden static initialization with explicit or lazy initialization.
+   * Review linking strategy only when evidence points to pre-main or dyld cost.
+
+7. **Require validation**
+
+   * Use Instruments for local diagnosis.
+   * Use XCTest launch metrics for repeatable regression checks.
+   * Use MetricKit or Xcode Organizer for production distributions.
+   * Prefer release-like builds, real devices, stable test data, and older supported hardware.
 
 ## Decision Rules
 
-- Treat roughly 400 ms to first visible frame as an aggressive user-experience target, not as a watchdog threshold and not as a pre-main-only budget.
-- Do not blame dyld by default. Slow launch can come from pre-main work, app initialization, root UI creation, first-frame rendering, synchronous I/O, or early post-launch blocking.
-- Treat `+load`, constructor functions, and static initialization with side effects as launch-critical until measurement proves otherwise.
-- Prefer explicit setup, lazy initialization, or scoped one-time initialization over work hidden in load-time hooks.
-- Do not present `+initialize` as a universal fix. It can be useful in legacy Objective-C code, but explicit or lazy initialization is usually clearer in modern code.
-- Do not recommend converting all modules to static linking. Consider launch cost, build time, binary size, duplicate symbols, resource packaging, SDK distribution, debugging, and mergeable libraries.
-- Do not use arbitrary framework-count limits. More dynamic frameworks can increase launch work, but the real cost must be measured.
-- Do not assume that queueing work asynchronously on the main queue guarantees it runs after the first frame. Verify with Instruments, signposts, lifecycle points, or other measurement.
-- Do not assume SwiftUI `.task` is always post-render or harmless. It is lifecycle-bound async work and can still affect early responsiveness.
-- Do not rely on Debug builds, simulator-only runs, or a single modern device when judging launch performance.
-- Do not use production launch histograms alone to identify the local bottleneck. Use them to prioritize and verify trends.
+* Treat roughly 400 ms to first visible frame as an aggressive user-experience target, not as a watchdog threshold and not as a pre-main-only budget.
+* Do not blame dyld by default. Slow launch can come from pre-main work, app initialization, launch orchestration, root UI creation, first-frame rendering, synchronous I/O, or early post-launch blocking.
+* Treat `+load`, constructor functions, and static initialization with side effects as launch-critical until measurement proves otherwise.
+* Prefer explicit setup, lazy initialization, or scoped one-time initialization over work hidden in load-time hooks.
+* Do not present `+initialize` as a universal fix. It can be useful in legacy Objective-C code, but explicit or lazy initialization is usually clearer in modern code.
+* Do not recommend converting all modules to static linking. Consider launch cost, build time, binary size, duplicate symbols, resource packaging, SDK distribution, debugging, and mergeable libraries.
+* Do not use arbitrary framework-count limits. More dynamic frameworks can increase launch work, but the real cost must be measured.
+* Do not parallelize launch steps until dependencies, shared state, actor isolation, main-thread requirements, and failure behavior are explicit.
+* Do not block the main thread while waiting for parallel startup work unless the code is proven safe, bounded, and required before launch can continue.
+* Treat unsafe parallelism as a correctness risk even when it improves a local benchmark.
+* Optimize the longest required dependency chain, not only the largest individual startup step.
+* Prefer shrinking the first usable surface over initializing the entire application graph before first frame.
+* Do not assume that queueing work asynchronously on the main queue guarantees it runs after the first frame. Verify with Instruments, signposts, lifecycle points, or other measurement.
+* Do not assume SwiftUI `.task` is always post-render or harmless. It is lifecycle-bound async work and can still affect early responsiveness.
+* Do not rely on Debug builds, simulator-only runs, or a single modern device when judging launch performance.
+* Do not use production launch histograms alone to identify the local bottleneck. Use them to prioritize and verify trends.
 
 ## Code Review Focus Areas
 
@@ -108,81 +141,107 @@ Do not compare cold launch, warm launch, prewarmed launch, and resume as one met
 
 Check for:
 
-- Objective-C classes or categories with `+load`
-- constructor attributes
-- C++ global objects with constructors
-- Swift globals or static properties that perform expensive work when first touched during launch
-- SDKs that register runtime hooks eagerly
-- many dynamic frameworks with startup-time initializers
-- ObjC category-heavy modules or libraries
+* Objective-C classes or categories with `+load`
+* constructor attributes
+* C++ global objects with constructors
+* Swift globals or static properties that perform expensive work when first touched during launch
+* SDKs that register runtime hooks eagerly
+* many dynamic frameworks with startup-time initializers
+* ObjC category-heavy modules or libraries
 
 Recommended direction:
 
-- Keep unavoidable load-time work tiny and deterministic.
-- Remove I/O, networking, locks, large allocations, decoding, and dependency setup from load-time paths.
-- Move registration to explicit startup points only when truly required before first frame.
-- Prefer lazy registration when feature use can trigger setup safely.
+* Keep unavoidable load-time work tiny and deterministic.
+* Remove I/O, networking, locks, large allocations, decoding, and dependency setup from load-time paths.
+* Move registration to explicit startup points only when truly required before first frame.
+* Prefer lazy registration when feature use can trigger setup safely.
+
+### Launch orchestration and dependency graph
+
+Check for:
+
+* long ordered lists of startup steps
+* launch code where comments encode required ordering
+* startup steps that depend on environment, auth, feature flags, persistence, secure storage, remote config, or dependency injection
+* launch orchestrators that run everything serially on the main thread
+* parallel launch work without explicit dependencies
+* dispatch groups, semaphores, synchronous waits, or blocking bridges from async work
+* startup tasks that mutate shared state without clear isolation
+* unclear failure behavior when a launch step fails
+* first-screen code that assumes the entire app graph is ready
+
+Recommended direction:
+
+* Split launch work into critical path, first-interaction path, post-first-frame work, feature-specific setup, and background maintenance.
+* Make dependencies explicit before changing execution order.
+* Run independent work concurrently only after thread-safety and main-thread requirements are clear.
+* Use bounded parallelism instead of unstructured fan-out.
+* Keep failure handling explicit: decide whether a failed step blocks launch, degrades functionality, retries later, or affects only one feature.
+* Find and shorten the longest required dependency chain.
+* Consider whether the first usable screen can appear before the full database, feature graph, or secondary modules are ready.
+* Avoid making maintainers preserve fragile launch ordering through comments alone.
 
 ### AppDelegate, SceneDelegate, and SwiftUI App startup
 
 Check for:
 
-- large dependency containers built synchronously
-- analytics, attribution, remote config, ads, push, feature flags, or experimentation SDKs initialized unconditionally
-- database opening or migration
-- keychain access on the critical path
-- synchronous network calls or reachability waits
-- heavy root view model construction
-- duplicate root UI setup between app and scene lifecycle code
-- work performed in SwiftUI `App.init`, root view `init`, or eager environment setup
+* large dependency containers built synchronously
+* analytics, attribution, remote config, ads, push, feature flags, or experimentation SDKs initialized unconditionally
+* database opening or migration
+* keychain access on the critical path
+* synchronous network calls or reachability waits
+* heavy root view model construction
+* duplicate root UI setup between app and scene lifecycle code
+* work performed in SwiftUI `App.init`, root view `init`, or eager environment setup
 
 Recommended direction:
 
-- Keep the first frame minimal but valid.
-- Separate launch-critical state from secondary app state.
-- Defer nonvisual services unless they are required for correctness, crash reporting, routing, security, or first-screen behavior.
-- Use lifecycle or explicit readiness points for work that must happen after UI appears.
+* Keep the first frame minimal but valid.
+* Separate launch-critical state from secondary app state.
+* Defer nonvisual services unless they are required for correctness, crash reporting, routing, security, or first-screen behavior.
+* Use lifecycle or explicit readiness points for work that must happen after UI appears.
+* Prefer a small first usable surface over fully initializing every top-level feature before display.
 
 ### First frame and early responsiveness
 
 Check for:
 
-- heavy initial layout or view hierarchy construction
-- expensive SwiftUI body dependencies during root view creation
-- synchronous image loading or decoding
-- immediate rendering of large data sets
-- blocking state restoration
-- first-screen data requirements that could use placeholders or cached state
+* heavy initial layout or view hierarchy construction
+* expensive SwiftUI body dependencies during root view creation
+* synchronous image loading or decoding
+* immediate rendering of large data sets
+* blocking state restoration
+* first-screen data requirements that could use placeholders or cached state
 
 Recommended direction:
 
-- Render a lightweight first screen.
-- Prefer cached, placeholder, skeleton, or progressive content when appropriate.
-- Delay nonessential first-screen enrichment until after visible UI.
-- Measure whether deferral improves first frame without causing interaction jank.
+* Render a lightweight first screen.
+* Prefer cached, placeholder, skeleton, or progressive content when appropriate.
+* Delay nonessential first-screen enrichment until after visible UI.
+* Measure whether deferral improves first frame without causing interaction jank.
 
 ## Measurement Guidance
 
 Use multiple layers of evidence:
 
-- **Instruments App Launch** for phase-level diagnosis and call-tree inspection.
-- **Time Profiler** for main-thread and CPU-heavy startup paths.
-- **dyld-related instruments or logs** when pre-main work is suspected.
-- **os_signpost** or equivalent markers for app-specific startup phases.
-- **XCTest launch metrics** for local regression detection and CI baselines.
-- **MetricKit / Xcode Organizer** for production distributions across devices, OS versions, and app versions.
+* **Instruments App Launch** for phase-level diagnosis and call-tree inspection.
+* **Time Profiler** for main-thread and CPU-heavy startup paths.
+* **dyld-related instruments or logs** when pre-main work is suspected.
+* **os_signpost** or equivalent markers for app-specific startup phases.
+* **XCTest launch metrics** for local regression detection and CI baselines.
+* **MetricKit / Xcode Organizer** for production distributions across devices, OS versions, and app versions.
 
 When measurements are noisy, clarify:
 
-- device model and OS version
-- Debug vs Release/Profile configuration
-- simulator vs physical device
-- cold/warm/prewarmed/resume classification
-- network and account state
-- app data size
-- first install vs returning user
-- authenticated vs unauthenticated launch
-- test iteration count and variance
+* device model and OS version
+* Debug vs Release/Profile configuration
+* simulator vs physical device
+* cold/warm/prewarmed/resume classification
+* first install, update launch, or returning-user launch
+* network and account state
+* app data size
+* authenticated vs unauthenticated launch
+* test iteration count and variance
 
 ## Third-Party SDK Policy
 
@@ -190,12 +249,12 @@ Every SDK that starts during launch must justify why it needs to run before firs
 
 Classify SDKs as:
 
-- launch-critical and synchronous
-- launch-critical but reducible
-- first-interaction required
-- post-first-frame acceptable
-- feature-specific and lazy
-- background-only
+* launch-critical and synchronous
+* launch-critical but reducible
+* first-interaction required
+* post-first-frame acceptable
+* feature-specific and lazy
+* background-only
 
 Be careful with blanket deferral. Crash reporting, security, deep linking, attribution, push routing, remote config, and feature flags can have correctness requirements. Prefer vendor-supported deferred modes, minimal startup modes, lazy modules, or narrower initialization when available.
 
@@ -203,14 +262,14 @@ Be careful with blanket deferral. Crash reporting, security, deep linking, attri
 
 When reviewing SwiftUI app launch, inspect:
 
-- `@main App` initialization
-- root `Scene` construction
-- root view initialization
-- eager `@StateObject` or observable model creation
-- environment injection
-- synchronous work inside view/model initializers
-- root `.task` or `.onAppear` work that starts immediately
-- large dependency graphs captured by root views
+* `@main App` initialization
+* root `Scene` construction
+* root view initialization
+* eager `@StateObject` or observable model creation
+* environment injection
+* synchronous work inside view/model initializers
+* root `.task` or `.onAppear` work that starts immediately
+* large dependency graphs captured by root views
 
 Keep the launch-time SwiftUI tree small. Move work out of root initialization unless it is required to decide the first visible UI. Treat lifecycle-triggered async work as early startup work until measurement proves it does not affect first-frame readiness or first interaction.
 
@@ -218,13 +277,14 @@ Keep the launch-time SwiftUI tree small. Move work out of root initialization un
 
 Use the reference files only when the task needs extra detail:
 
-- Read `references/launch-taxonomy-and-targets.md` for cold/warm/prewarmed/resume terminology, first-frame targets, and measurement setup.
-- Read `references/pre-main-dyld-and-static-initializers.md` for dyld, pre-main, `+load`, `+initialize`, constructor functions, Objective-C categories, runtime registration, and static initialization.
-- Read `references/linking-strategy.md` for dynamic frameworks, static libraries, mergeable libraries, modularization, and launch-time linking trade-offs.
-- Read `references/appdelegate-scenedelegate-and-first-frame.md` for `UIApplicationDelegate`, `UISceneDelegate`, dependency setup, root UI creation, first-frame readiness, and main-thread startup work.
-- Read `references/swiftui-app-launch.md` for SwiftUI `App`, root view setup, observable state, `.task`, `.onAppear`, and environment initialization.
-- Read `references/third-party-sdks-at-launch.md` for analytics, crash reporting, ads, attribution, remote config, push, feature flags, security SDKs, and vendor initialization strategy.
-- Read `references/metrics-instruments-xctest-metrickit.md` for Instruments, Time Profiler, signposts, XCTest launch metrics, MetricKit, Xcode Organizer, CI baselines, and production monitoring.
+* Read `references/launch-taxonomy-and-targets.md` for cold/warm/prewarmed/resume terminology, first-frame targets, first install/update launch classification, and measurement setup.
+* Read `references/pre-main-dyld-and-static-initializers.md` for dyld, pre-main, `+load`, `+initialize`, constructor functions, Objective-C categories, runtime registration, and static initialization.
+* Read `references/linking-strategy.md` for dynamic frameworks, static libraries, mergeable libraries, modularization, launch-time linking trade-offs, binary layout, and order-file considerations.
+* Read `references/launch-orchestration-and-dependency-graph.md` for launch steps, critical path modeling, explicit dependencies, safe parallelism, race/deadlock risks, failure handling, and longest-chain optimization.
+* Read `references/appdelegate-scenedelegate-and-first-frame.md` for `UIApplicationDelegate`, `UISceneDelegate`, dependency setup, root UI creation, first-frame readiness, and main-thread startup work.
+* Read `references/swiftui-app-launch.md` for SwiftUI `App`, root view setup, observable state, `.task`, `.onAppear`, and environment initialization.
+* Read `references/third-party-sdks-at-launch.md` for analytics, crash reporting, ads, attribution, remote config, push, feature flags, security SDKs, and vendor initialization strategy.
+* Read `references/metrics-instruments-xctest-metrickit.md` for Instruments, Time Profiler, signposts, XCTest launch metrics, MetricKit, Xcode Organizer, CI baselines, and production monitoring.
 
 ## Output Format
 
@@ -232,11 +292,15 @@ When reviewing code or diagnosing a report, return:
 
 ### Launch classification
 
-Cold launch, warm launch, prewarmed launch, resume, or unknown. Mention measurement ambiguity if present.
+Cold launch, warm launch, prewarmed launch, first install/update launch, resume, or unknown. Mention measurement ambiguity if present.
 
 ### Suspected phase
 
-Identify the most likely phase: pre-main, static initialization, app delegate, scene setup, SwiftUI root setup, first-frame rendering, early post-launch responsiveness, or measurement/setup issue.
+Identify the most likely phase: pre-main, static initialization, app delegate, scene setup, SwiftUI root setup, launch orchestration, first-frame rendering, early post-launch responsiveness, or measurement/setup issue.
+
+### Critical path
+
+Identify the required startup chain if enough information is available. Mention hidden ordering, implicit dependencies, or unknown dependencies when they block safe optimization.
 
 ### Findings
 
@@ -247,8 +311,9 @@ List concrete risks found in the code, architecture, metrics, or trace. Avoid ge
 Group recommendations by priority:
 
 1. High-confidence launch-path fixes
-2. Measurement or instrumentation needed
-3. Optional architectural cleanup
+2. Dependency/orchestration fixes
+3. Measurement or instrumentation needed
+4. Optional architectural cleanup
 
 ### Validation
 
