@@ -312,21 +312,21 @@ Risky:
 let header = try await service.loadHeader()
 let badges = try await service.loadBadges()
 let timeline = try await service.loadTimeline()
-let ads = try await service.loadPromotions()
+let promotions = try await service.loadPromotions()
 
 state = .loaded(
     DetailsState(
         header: header,
         badges: badges,
         timeline: timeline,
-        promotions: ads
+        promotions: promotions
     )
 )
 ```
 
-If `promotions` is slow, the primary details are delayed too.
+If `promotions` is slow, the primary details are delayed too. The same problem can happen even with parallel requests if the UI waits for all results before updating.
 
-Prefer independent updates when product rules allow:
+Prefer section-level updates when product rules allow partial content.
 
 ```swift
 @MainActor
@@ -336,49 +336,78 @@ func loadDetails() async {
     state.timeline = .loading
     state.promotions = .loading
 
-    Task {
-        await loadHeader()
-    }
+    async let header: Void = loadHeader()
+    async let badges: Void = loadBadges()
+    async let timeline: Void = loadTimeline()
+    async let promotions: Void = loadPromotions()
 
-    Task {
-        await loadBadges()
-    }
-
-    Task {
-        await loadTimeline()
-    }
-
-    Task {
-        await loadPromotions()
-    }
+    _ = await (header, badges, timeline, promotions)
 }
 ```
 
-If these tasks belong to the screen lifetime, store and cancel them when the screen disappears.
+Use `async let` here because the set of sections is small and fixed, and the section loads belong to the lifetime of `loadDetails()`.
+
+Each section loader should update only its own state:
 
 ```swift
-private var loadingTasks: [Task<Void, Never>] = []
-
 @MainActor
-func loadDetails() {
-    cancelLoading()
-
-    loadingTasks = [
-        Task { await loadHeader() },
-        Task { await loadBadges() },
-        Task { await loadTimeline() },
-        Task { await loadPromotions() }
-    ]
+private func loadHeader() async {
+    do {
+        let header = try await service.loadHeader()
+        state.header = .loaded(header)
+    } catch {
+        state.header = .failed(error)
+    }
 }
 
 @MainActor
-func cancelLoading() {
-    loadingTasks.forEach { $0.cancel() }
-    loadingTasks.removeAll()
+private func loadPromotions() async {
+    do {
+        let promotions = try await service.loadPromotions()
+        state.promotions = promotions.isEmpty
+            ? .empty
+            : .loaded(promotions)
+    } catch {
+        state.promotions = .failed(error)
+    }
 }
 ```
 
-Use structured concurrency when all child work belongs to one async scope. Use stored tasks only when work is tied to an object or screen lifetime and must be cancelled externally.
+This lets primary content appear as soon as it is ready while slower secondary sections continue loading.
+
+Use a task group when the number of sections is dynamic.
+
+Use stored `Task {}` only when the work is intentionally owned by the screen or model lifetime and must be cancelled externally, such as when loading is started from a synchronous method or must be cancelled on disappearance.
+
+```swift
+@MainActor
+final class DetailsModel {
+    private var loadingTasks: [Task<Void, Never>] = []
+
+    func startLoading() {
+        cancelLoading()
+
+        state.header = .loading
+        state.badges = .loading
+        state.timeline = .loading
+        state.promotions = .loading
+
+        loadingTasks = [
+            Task { await loadHeader() },
+            Task { await loadBadges() },
+            Task { await loadTimeline() },
+            Task { await loadPromotions() }
+        ]
+    }
+
+    func cancelLoading() {
+        loadingTasks.forEach { $0.cancel() }
+        loadingTasks.removeAll()
+    }
+}
+```
+
+Do not use unstructured `Task {}` merely to make section loading parallel. Prefer structured concurrency when all child work belongs to one async scope.
 
 ## Avoid Layout Jumps
 
