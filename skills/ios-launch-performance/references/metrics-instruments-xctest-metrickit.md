@@ -1,119 +1,147 @@
 # Metrics, Instruments, XCTest, MetricKit, and Production Monitoring
 
-## Scope Boundary
-
 Use this reference when the task is about measuring, diagnosing, validating, or monitoring iOS launch performance.
+
+This reference is intentionally about evidence and interpretation. It should not explain how to fix every bottleneck. Once the measurement points to a likely cause, route the agent to the focused reference for that cause.
+
+## Scope Boundary
 
 This reference covers:
 
-- Instruments App Launch traces
-- Time Profiler during startup
-- signposts and launch phase markers
-- XCTest launch metrics
-- CI launch baselines
-- MetricKit launch metrics
-- Xcode Organizer launch reports
-- production monitoring strategy
+* Instruments App Launch traces
+* Time Profiler during app startup
+* signposts and app-owned launch phase markers
+* XCTest launch metrics
+* `xctrace` exports or textual summaries when provided by the user
+* CI launch baselines and regression gates
+* MetricKit launch metrics and signpost metrics
+* Xcode Organizer production launch reports
+* production launch monitoring strategy
 
-This reference does not explain how to fix specific launch bottlenecks. When measurement points to a cause, hand off to the relevant reference:
+This reference does not cover implementation fixes in detail:
 
-- `pre-main-dyld-and-static-initializers.md` for dyld, static initializers, `+load`, constructors, and runtime registration
-- `linking-strategy.md` for static, dynamic, and mergeable library trade-offs
-- `appdelegate-scenedelegate-and-first-frame.md` for UIKit lifecycle startup and first-frame work
-- `swiftui-app-launch.md` for SwiftUI `App`, root view, observable state, `.task`, and `.onAppear`
-- `third-party-sdks-at-launch.md` for analytics, crash reporting, remote config, ads, attribution, push, feature flags, and security SDKs
-- `launch-taxonomy-and-targets.md` for cold, warm, prewarmed, resume, first-frame targets, and measurement setup
+* Use `launch-taxonomy-and-targets.md` for cold, warm, prewarmed, resume, first-frame targets, first install/update launch, and measurement comparability.
+* Use `pre-main-dyld-and-static-initializers.md` for dyld, static initializers, `+load`, `+initialize`, constructor functions, and runtime registration.
+* Use `linking-strategy.md` for static libraries, dynamic frameworks, mergeable libraries, order files, and binary-layout trade-offs.
+* Use `launch-orchestration-and-dependency-graph.md` for launch steps, critical path, dependency graphs, safe parallelism, and longest-chain analysis.
+* Use `appdelegate-scenedelegate-and-first-frame.md` for UIKit lifecycle startup, root UI creation, first-frame readiness, and main-thread launch work.
+* Use `swiftui-app-launch.md` for SwiftUI `App`, root view setup, observable state, `.task`, `.onAppear`, and environment initialization.
+* Use `third-party-sdks-at-launch.md` for analytics, crash reporting, ads, attribution, push, remote config, feature flags, security SDKs, and vendor startup policy.
 
 ## Agent Capabilities
 
 The agent can:
 
-- ask for an Instruments trace, XCTest output, MetricKit payload, Organizer screenshot/export, or CI trend
-- inspect code that defines launch tests, signposts, MetricKit subscribers, logging, and metric upload paths
-- propose where to place app-owned signposts around startup phases
-- recommend a measurement plan before optimization
-- explain what each measurement layer can and cannot prove
-- identify ambiguity in launch classification, test setup, and metric interpretation
-- suggest CI gating and production monitoring practices
-- connect a metric regression to the next reference to inspect
+* ask for an Instruments trace, `xctrace` export, XCTest output, MetricKit payload, Organizer screenshot/export, CI trend, or production dashboard summary
+* inspect code that defines launch tests, signposts, MetricKit subscribers, logging, metric upload, and test launch arguments
+* propose where to place app-owned signposts around launch phases
+* identify ambiguity in scenario classification, readiness boundary, device class, build configuration, or data set
+* explain what each measurement layer can and cannot prove
+* recommend a measurement plan before optimization
+* suggest CI baseline and regression-gate strategy
+* connect a metric regression to the next reference to inspect
 
-The agent should not claim it has directly measured the app unless it has actual trace, metric, test, or payload data in the task context. Without evidence, it should describe what to measure and what each result would imply.
+The agent should not claim it measured the app unless trace, test, payload, or monitoring data is present in the task context. Without evidence, it should say what to measure, why to measure it, and how to interpret possible outcomes.
 
 ## Measurement Layers
 
-Use launch measurements at multiple layers. Each layer answers a different question.
+Use several layers of evidence because each answers a different question.
 
-### Instruments
+### Local diagnosis: Instruments
 
-Use Instruments for local diagnosis.
-
-Best for:
-
-- finding which launch phase is expensive
-- inspecting call stacks
-- seeing main-thread work during startup
-- validating whether a code change moved or removed launch work
-- correlating custom signposts with system timelines
-
-Limitations:
-
-- local traces may not represent production devices or real user data
-- simulator traces are not sufficient for launch conclusions
-- Debug builds can exaggerate or hide costs
-- a single trace can be noisy
-
-### XCTest launch metrics
-
-Use XCTest launch metrics for repeatable local and CI regression checks.
+Use Instruments when the question is **why this launch is slow on this device/build**.
 
 Best for:
 
-- preventing launch regressions in pull requests or nightly runs
-- comparing the same app flow across commits
-- tracking launch duration under controlled conditions
-- validating that a change did not make launch worse
+* locating expensive launch phases
+* inspecting call stacks and thread activity
+* seeing main-thread work before first frame
+* correlating app-owned signposts with system timelines
+* validating that a change moved, shortened, or removed launch-path work
+* comparing before/after traces under controlled conditions
 
 Limitations:
 
-- results are sensitive to device state, OS version, data set, network, and account state
-- UI tests usually measure a configured launch path, not the full diversity of production launches
-- CI devices can be noisy unless the environment is controlled
-- XCTest metrics show a symptom, not the exact bottleneck
+* a local trace may not represent production devices or data sets
+* simulator traces are not enough for launch conclusions
+* Debug builds can distort results
+* a single trace can be noisy
+* Instruments explains a local run, not the whole user population
 
-### MetricKit
+### Automated regression: XCTest launch metrics
 
-Use MetricKit for production launch distributions collected from real devices.
+Use XCTest launch metrics when the question is **did this commit or release candidate regress a known launch path**.
 
 Best for:
 
-- monitoring launch trends by version/build
-- detecting regressions after release
-- comparing launch behavior across device classes and OS versions
-- understanding real-world distributions rather than a single lab number
+* repeatable launch checks on controlled devices
+* CI or scheduled device-farm baselines
+* comparing one scenario across commits
+* catching large regressions before release
+* validating that a targeted fix did not make the measured launch path worse
 
 Limitations:
 
-- MetricKit launch metrics are aggregated and delayed
-- histograms do not identify the exact source line or function
-- payloads may combine many sessions and device conditions
-- payload interpretation needs app version, build, device, OS, and scenario context
+* launch tests measure a configured scenario, not every production scenario
+* results are sensitive to device state, OS, test data, cache state, account state, network, and feature rollout
+* CI device pools can be noisy
+* XCTest reports a symptom and boundary, not the exact source line
 
-### Xcode Organizer
+### Field trend: MetricKit
 
-Use Xcode Organizer for App Store-distributed production metrics.
+Use MetricKit when the question is **how launch behaves on real user devices after distribution**.
 
 Best for:
 
-- quick product-level visibility into launch time trends
-- comparing app versions and builds
-- checking percentile views such as typical and high-impact users
-- segmenting by device category where available
+* app-version and build-to-build launch trends
+* device-class and OS-version segmentation
+* detecting production regressions that local testing missed
+* understanding distributions instead of isolated lab samples
+* separating launch, prewarmed launch, resume, and extended launch histograms
 
 Limitations:
 
-- data is available only for distributed builds and eligible users
-- there is a delay before metrics appear
-- Organizer is a prioritization and trend tool, not a local root-cause debugger
+* payloads are aggregated and delayed
+* histograms do not identify the exact function or source line
+* payloads reflect many sessions, device conditions, and user states
+* interpretation needs app version, build, OS, device, and scenario context
+
+### Product visibility: Xcode Organizer
+
+Use Xcode Organizer when the question is **which production performance issue should the team prioritize**.
+
+Best for:
+
+* quick launch trend visibility for distributed builds
+* comparing versions and builds
+* spotting device-specific or OS-specific issues
+* using percentile views to avoid average-only decisions
+* deciding whether a local regression also matters in the field
+
+Limitations:
+
+* data is delayed and aggregated
+* availability depends on distribution and eligible users
+* Organizer helps prioritize and triage; it is not a replacement for local traces
+
+## Measurement Setup Checklist
+
+Before accepting or comparing a launch number, identify:
+
+* launch scenario: cold, warm, prewarmed, resume, first install, first run after update, or unknown
+* measurement boundary: tap-to-first-draw, process-start-to-first-draw, `main`-to-first-screen, launch-to-responsive, or custom interval
+* device model and OS version
+* build configuration: Debug, Release, Profile, TestFlight, or App Store
+* simulator or physical device
+* app version and build number
+* account state: logged out, logged in, restored session, enterprise profile, migration state
+* data size: fresh install, small cache, large cache, large database, upgraded schema
+* network mode: live network, mocked, disabled, captive/slow network, or airplane mode
+* feature flags, remote config, experiments, or rollout cohort
+* number of runs and variance
+* measurement source: Instruments, XCTest, MetricKit, Organizer, custom logging, or manual timing
+
+If these are unknown, treat the number as a symptom rather than conclusive evidence.
 
 ## Instruments Guidance
 
@@ -122,212 +150,251 @@ When diagnosing launch locally, start with Instruments before changing code.
 Recommended approach:
 
 1. Use a release-like build configuration.
-2. Prefer a physical device, including an older supported device when possible.
-3. Capture the launch with the App Launch template when available.
-4. Add Time Profiler if CPU-heavy startup work is suspected.
-5. Add signpost-related instruments when app-owned launch markers exist.
-6. Compare traces before and after the change under the same conditions.
+2. Prefer a physical device. Include an older supported device when possible.
+3. Capture the same launch scenario before and after the change.
+4. Use the App Launch template when available.
+5. Add Time Profiler when CPU-heavy startup work is suspected.
+6. Add signpost-related instruments when app-owned launch markers exist.
+7. Capture more than one run when results are surprising or noisy.
 
-What to inspect:
+Inspect:
 
-- timeline location of first visible UI
-- work before `main` or before app lifecycle entry
-- main-thread call tree during app and scene initialization
-- CPU-heavy work before first frame
-- synchronous file, database, keychain, or decoding work if visible in stacks
-- long intervals between lifecycle entry and first frame
-- app-owned signpost intervals around startup phases
-- repeated or duplicated initialization
+* first visible app frame location in the timeline
+* work before app lifecycle entry
+* main-thread call tree during app and scene initialization
+* long gaps between lifecycle entry, root UI setup, first draw, and responsiveness
+* static initialization or framework work if visible in the trace
+* CPU-heavy startup work
+* blocking synchronization on the launch path
+* file, database, keychain, image decoding, or JSON parsing work before first frame
+* duplicated initialization
+* third-party SDK startup regions
+* app-owned signpost intervals
 
-Do not over-interpret one trace. If a trace is surprising, capture more than one run and check whether the same phase remains expensive.
+Interpretation rules:
+
+* A hot function is not automatically a launch bug. Confirm it runs before first frame or first interaction.
+* Main-thread work before first frame is usually more launch-critical than background work that does not block readiness.
+* Background work can still hurt launch if it competes for CPU, I/O, locks, memory, or priority.
+* If the expensive region appears before app lifecycle entry, route to `pre-main-dyld-and-static-initializers.md` or `linking-strategy.md`.
+* If the expensive region is a sequence of app-owned startup steps, route to `launch-orchestration-and-dependency-graph.md`.
 
 ## Time Profiler During Launch
 
-Use Time Profiler when launch is CPU-bound or when the App Launch trace shows a broad expensive region that needs call-stack detail.
+Use Time Profiler when the App Launch trace identifies a broad expensive region or when startup appears CPU-bound.
 
-The agent should look for:
+Look for:
 
-- heavy work on the main thread
-- repeated initialization paths
-- expensive constructors or setup functions visible after app code begins
-- large parsing, decoding, formatting, hashing, sorting, or dependency construction
-- blocking synchronization on the launch path
-- third-party SDK startup functions
+* main-thread CPU work before first frame
+* repeated setup paths
+* expensive constructors or setup functions visible after app code begins
+* parsing, decoding, formatting, hashing, sorting, or graph construction
+* lock contention or semaphore waits
+* synchronous service initialization
+* third-party SDK startup functions
+* launch work that appears on background queues but blocks readiness indirectly
 
-Useful interpretation rules:
+When reporting Time Profiler findings, include:
 
-- A hot function is not automatically a launch bug; confirm it runs before first frame or first interaction.
-- Main-thread time before first frame usually matters more than background work that does not block readiness.
-- Background work can still hurt launch if it competes for CPU, I/O, locks, memory, or priority with first-frame work.
-- If heavy work appears before app lifecycle entry, use the pre-main reference.
+* thread where the work occurs
+* whether it runs before first frame, before first interaction, or after launch
+* whether it blocks the critical path
+* whether it is app code, system code, or third-party code
+* whether the trace is stable across repeated runs
 
 ## Signposts and Launch Phase Markers
 
-Use signposts to make app-owned startup phases visible in Instruments and, where appropriate, in MetricKit custom metrics.
+Use signposts to make app-owned startup phases visible in Instruments. Use MetricKit signpost metrics only for a small number of stable, important intervals.
 
 Good signpost boundaries:
 
-- app lifecycle entry to root UI configured
-- scene connection to window visible
-- dependency container bootstrap
-- session/auth state resolution
-- feature flag local read
-- database open or migration check
-- root view model construction
-- first-screen cached data load
-- post-first-frame noncritical startup work
+* app lifecycle entry to root UI configured
+* scene connection to window visibility
+* root UI construction
+* dependency container bootstrap
+* session or auth state resolution
+* local feature flag read
+* database open or migration check
+* root view model construction
+* first-screen cached data load
+* post-first-frame startup work that can affect responsiveness
 
 Poor signpost boundaries:
 
-- one giant `launch` interval covering everything
-- intervals that cross unrelated asynchronous work without clear ownership
-- high-cardinality names that include user IDs, account IDs, request IDs, or dynamic strings
-- signposts around every tiny function, creating noise
-- signposts that start and end on unrelated code paths
+* one giant interval covering the entire launch
+* intervals with unclear ownership
+* intervals that start and end on unrelated async paths
+* very small functions that create trace noise
+* high-cardinality names or categories
+* names containing user IDs, account IDs, request IDs, URLs, tokens, or dynamic strings
 
-Recommended naming style:
+Naming guidance:
 
-```swift
-import os
+* Use stable names across releases.
+* Keep names short and phase-oriented.
+* Prefer a small number of meaningful intervals over many noisy intervals.
+* Do not include private or user-specific data in names or metadata.
+* Make the boundary clear enough that a future engineer can compare traces without reading the implementation.
 
-private let startupLog = Logger(subsystem: "com.example.app", category: "startup")
-private let startupSignposter = OSSignposter(logger: startupLog)
+MetricKit-specific caution:
 
-func prepareInitialSession() async {
-    let id = startupSignposter.makeSignpostID()
-    let state = startupSignposter.beginInterval("InitialSessionPreparation", id: id)
-    defer { startupSignposter.endInterval("InitialSessionPreparation", state) }
-
-    await sessionStore.loadCachedSession()
-}
-```
-
-Keep signpost names stable across releases. Stable names make trace comparison and dashboards easier.
+* Ordinary `OSSignposter` / `os_signpost` usage is excellent for Instruments.
+* MetricKit custom signpost metrics require MetricKit-compatible signpost APIs/log handles and should be reserved for important intervals.
+* Avoid high-volume signposts in MetricKit payloads.
+* Treat MetricKit signpost metrics as production distributions, not as function-level profiling.
 
 ## XCTest Launch Metrics
 
 Use XCTest launch metrics when the team needs repeatable regression checks.
 
-Recommended pattern:
+Prefer `XCTApplicationLaunchMetric` for app launch measurement.
 
-```swift
-import XCTest
+Interpretation:
 
-final class LaunchPerformanceTests: XCTestCase {
-    func testLaunchToResponsiveState() {
-        let app = XCUIApplication()
-        app.launchArguments += ["-uiTesting", "1", "-useStableStartupData", "1"]
+* `XCTApplicationLaunchMetric()` measures application launch to first frame and extended launch tasks.
+* `XCTApplicationLaunchMetric(waitUntilResponsive: true)` is useful when the readiness boundary includes early responsiveness, not only first draw.
+* Older signpost-based XCTest metrics can be useful for custom regions, but launch-specific tests should prefer the launch metric when available.
 
-        measure(metrics: [XCTApplicationLaunchMetric(waitUntilResponsive: true)]) {
-            app.launch()
-            app.terminate()
-        }
-    }
-}
-```
+When reviewing a launch test, check:
 
-Notes for the agent:
+* the measured launch scenario is named clearly
+* test launch arguments stabilize data and disable unrelated variability
+* the app starts from a known state
+* process launch is actually measured, not resume
+* first install, logged-out, logged-in, deep link, push, and restored-session launches are not mixed into one baseline
+* the readiness boundary matches the product expectation
+* live network dependency is mocked, disabled, or deliberately part of the scenario
+* device model, OS, build configuration, and scenario are stored with the result
+* CI tracks history rather than relying on one pass/fail result
 
-- `XCTApplicationLaunchMetric()` records launch to first frame and extended launch tasks.
-- `XCTApplicationLaunchMetric(waitUntilResponsive: true)` is useful when the team cares about early responsiveness, not only first draw.
-- Keep test data stable. A launch test that randomly depends on network, account state, feature rollout, or cache size is not a reliable baseline.
-- Prefer physical devices for meaningful launch baselines.
-- Use consistent OS/device pools when comparing results.
-- Do not mix first install, logged-out, logged-in, deep link, push launch, and restored-session launches in one baseline.
+Avoid:
 
-When the agent reviews launch tests, it should check:
-
-- whether the test uses launch arguments to stabilize data and disable unrelated variability
-- whether the measured scenario is named clearly
-- whether the app is terminated between iterations when measuring process launch
-- whether the test waits for the right readiness boundary
-- whether CI stores trends rather than relying only on one failed run
-- whether baselines are device-specific rather than global across all hardware
+* placing unrelated cleanup inside the measured launch block
+* relying on simulator-only results
+* comparing Debug results with Release/Profile history
+* using one global threshold for all devices and scenarios
+* failing PRs for changes inside normal variance
+* calling a launch test stable when it depends on remote config, random cache state, or live backend latency
 
 ## CI Baselines and Regression Gates
 
-A launch performance test is useful only when the team treats it as a trend, not a single absolute number.
+A launch performance test is useful only when the team treats it as a trend.
 
 Recommended baseline strategy:
 
 1. Choose a small set of representative launch scenarios.
 2. Run on stable physical devices or a controlled device farm.
-3. Store historical results by app version, commit, device model, OS version, build configuration, and scenario.
-4. Track median and high-percentile values when enough samples exist.
-5. Alert on meaningful regressions rather than tiny noise-level changes.
-6. Require an Instruments trace for regressions that exceed the agreed threshold.
+3. Store results with commit, app version, build configuration, device model, OS version, data set, and scenario.
+4. Track median and high-percentile values when sample size allows it.
+5. Alert on meaningful regression windows rather than one noisy run.
+6. Require a local trace or `xctrace` artifact for regressions above the agreed threshold.
+7. Rebaseline only after an intentional launch-path change is reviewed and documented.
 
-Good baseline dimensions:
+Useful scenario dimensions:
 
-- cold or warm classification
-- first install vs returning user
-- logged-out vs logged-in
-- cached data size
-- network mocked, disabled, or real
-- device model
-- OS version
-- app build configuration
-- locale if startup formatting/localization is heavy
+* cold vs warm classification
+* first install vs returning user
+* first run after app update
+* logged out vs logged in
+* small cache vs large cache
+* no local database vs migrated database
+* mocked network vs real network
+* normal mode vs Low Power Mode when used as a stress signal
+* older supported device vs current flagship
 
-Avoid:
+Regression-gate guidance:
 
-- one universal launch budget for every device and scenario
-- comparing simulator results with physical-device history
-- comparing Debug builds with Release builds
-- using averages alone when variance is high
-- failing pull requests for tiny changes within normal noise
-- accepting a large regression because a single later run happened to pass
+* Use per-device and per-scenario baselines.
+* Prefer percentage and absolute thresholds together.
+* Treat high-percentile regression as important even if the average looks acceptable.
+* Do not block every PR on slow/noisy UI launch tests if the device pool is unstable; scheduled or nightly runs can be more reliable.
+* Store raw measurements, not only summarized pass/fail output.
 
 ## MetricKit Launch Metrics
 
 Use MetricKit when the app needs production launch monitoring or build-to-build launch regression detection.
 
-The relevant payload area is `MXMetricPayload.applicationLaunchMetrics`, which provides `MXAppLaunchMetric` histograms. Useful launch-related properties include:
+The relevant payload area is `MXMetricPayload.applicationLaunchMetrics`, which provides `MXAppLaunchMetric` histograms. Important launch-related properties include:
 
-- `histogrammedTimeToFirstDraw`
-- `histogrammedOptimizedTimeToFirstDraw`
-- `histogrammedApplicationResumeTime`
-- `histogrammedExtendedLaunch`
+* `histogrammedTimeToFirstDraw`
+* `histogrammedOptimizedTimeToFirstDraw`
+* `histogrammedApplicationResumeTime`
+* `histogrammedExtendedLaunch`
 
 Interpretation guidance:
 
-- `histogrammedTimeToFirstDraw` is the primary production signal for launch to first draw.
-- `histogrammedOptimizedTimeToFirstDraw` should be treated separately from ordinary launch measurements because system prewarming/optimization can change the path.
-- `histogrammedApplicationResumeTime` is about returning from background, not full process launch.
-- `histogrammedExtendedLaunch` can reveal work that continues beyond the first draw but still belongs to the launch experience.
+* `histogrammedTimeToFirstDraw` represents ordinary launch to first draw.
+* `histogrammedOptimizedTimeToFirstDraw` represents launches affected by system optimization/prewarming and must be tracked separately.
+* `histogrammedApplicationResumeTime` is resume from background, not full process launch.
+* `histogrammedExtendedLaunch` helps detect work that continues beyond first draw and still affects the launch experience.
 
-Do not collapse all MetricKit launch histograms into one number. Keep launch, optimized/prewarmed launch, resume, and extended launch separate.
+Do not collapse these histograms into one number. Keep ordinary launch, optimized/prewarmed launch, resume, and extended launch separate.
 
 When reviewing MetricKit integration, check:
 
-- subscriber registration occurs early enough to receive reports, but without heavy processing on the launch path
-- payload processing is lightweight or moved off the main thread
-- payload upload is deferred and resilient
-- app version, build number, OS version, device model, and environment metadata are preserved where available
-- histograms are stored without losing bucket information
-- privacy-sensitive information is not added to metric records
-- dashboards separate P50/P90/P95-style views where possible
-- launch metrics are compared build-to-build, not only as raw global averages
+* subscriber registration is early enough to receive payloads but does not perform heavy processing on the launch path
+* payload handling avoids main-thread work during startup
+* upload is deferred, resilient, and batched
+* app version, build number, OS version, device model, and environment metadata are preserved where available
+* histogram bucket information is stored, not flattened into one average too early
+* P50/P90/P95-style views are available where sample size supports them
+* launch metrics are compared build-to-build and version-to-version
+* privacy-sensitive information is not added to metric records
+* resume metrics are not presented as launch metrics
+* optimized/prewarmed launch metrics are not mixed with ordinary launch metrics
+
+MetricKit cannot answer:
+
+* which exact source line caused the regression
+* whether a specific function is slow in one local trace
+* whether a local optimization fixed every production device class
+* whether a custom timestamp covers system-side launch work
+
+Use MetricKit to prioritize and verify field trends; use Instruments and reproducible tests for root cause.
 
 ## Xcode Organizer
 
-Use Xcode Organizer as a production trend and prioritization tool.
+Use Xcode Organizer as a production trend and prioritization tool for distributed builds.
 
-The agent can recommend checking Organizer when:
+Recommend checking Organizer when:
 
-- local tests look good but users report slow launch
-- launch regressions appear only after App Store/TestFlight distribution
-- the team needs device-specific production visibility
-- the issue may affect only older devices or a specific OS version
-- the team needs to compare app versions and builds
+* local tests look good but users report slow launch
+* launch regressions appear only after TestFlight or App Store distribution
+* the team needs device-specific production visibility
+* the issue may affect older devices or a specific OS version
+* the team needs to compare app versions and builds
+* field data is needed before prioritizing a launch investigation
 
 Organizer guidance:
 
-- Check launch time trends by version/build.
-- Compare typical and high-impact percentile views when available.
-- Segment by device class if the UI allows it.
-- Treat Organizer data as delayed and aggregated.
-- Use Organizer to decide priority, then use Instruments or reproducible tests for root cause.
+* Check launch trends by app version and build.
+* Prefer percentile and device-segment views when available.
+* Treat the data as delayed and aggregated.
+* Use Organizer to decide priority and scope, then use local traces or reproducible tests for root cause.
+* Do not use Organizer screenshots as a replacement for stored CI/performance history.
+
+## Custom App Telemetry
+
+Custom launch telemetry can complement Apple tools, but it must be labeled carefully.
+
+Useful custom context:
+
+* app version and build
+* launch scenario inferred by app-owned state where safe
+* logged-in/logged-out state
+* first install, returning user, or post-update run
+* data size bucket, not raw user data
+* feature rollout or experiment cohort where privacy-safe
+* first screen route or launch entry point category
+* high-level signpost phase durations
+
+Cautions:
+
+* App timestamps usually cannot see system-side work before the app starts executing.
+* Prewarming can make app-defined intervals look better than user-perceived launch.
+* Avoid sending user identifiers, account identifiers, request identifiers, tokens, or raw URLs.
+* Do not use app telemetry as the only source of truth for first draw unless the boundary is validated against system tools.
+* Keep event names and dimensions low-cardinality.
 
 ## Production Monitoring Strategy
 
@@ -335,26 +402,34 @@ A good launch monitoring setup combines local diagnosis, automated regression ch
 
 Recommended model:
 
-- **Local diagnosis**: Instruments App Launch, Time Profiler, signposts
-- **Automated regression**: XCTest launch metrics in CI or scheduled device runs
-- **Production trend**: MetricKit and Xcode Organizer
-- **App-owned context**: stable signposts, launch scenario tags, build metadata, feature rollout state where privacy-safe
+* **Local diagnosis**: Instruments App Launch, Time Profiler, signposts
+* **Automated regression**: XCTest launch metrics in CI or scheduled physical-device runs
+* **Production trend**: MetricKit and Xcode Organizer
+* **App-owned context**: stable phase markers, launch scenario tags, build metadata, and privacy-safe rollout context
 
-Track at least:
+Track separately:
 
-- launch-to-first-draw distribution
-- optimized/prewarmed launch distribution if available
-- resume distribution separately
-- extended launch distribution if relevant
-- device model and OS version breakdown
-- app version/build trend
-- startup scenario classification when app-owned telemetry can safely infer it
+* ordinary launch-to-first-draw distribution
+* optimized/prewarmed launch distribution
+* resume distribution
+* extended launch distribution
+* device model and OS version breakdown
+* app version/build trend
+* first install / first run after update when app telemetry can safely infer it
+* first screen or entry-point category when useful and privacy-safe
 
-Avoid using production monitoring as a replacement for local traces. Production tells the team where and how often launch is slow; local tools explain why.
+Escalation model:
+
+1. Production trend shows regression.
+2. CI or local controlled test attempts to reproduce it.
+3. Instruments identifies the phase and call stack.
+4. The fix is validated locally.
+5. CI baseline confirms no regression.
+6. MetricKit or Organizer confirms field recovery in a later build.
 
 ## Recommended Agent Output
 
-When using this reference, include a measurement section in the answer.
+When using this reference, include a measurement section.
 
 Suggested structure:
 
@@ -375,26 +450,34 @@ Suggested structure:
 - What ambiguity remains:
 
 ### Handoff
-- If the issue is in pre-main, read ...
-- If the issue is in app lifecycle startup, read ...
+- If the issue is in pre-main:
+- If the issue is in linking strategy:
+- If the issue is in launch orchestration:
+- If the issue is in app lifecycle startup:
+- If the issue is in SwiftUI root setup:
+- If the issue is in third-party SDK startup:
 ```
+
+Keep recommendations tied to evidence. Avoid generic performance advice when the task only needs a measurement plan.
 
 ## Common Mistakes
 
-- Treating resume time as launch time.
-- Comparing cold, warm, prewarmed, and resume measurements as if they were interchangeable.
-- Using a single local trace as a production conclusion.
-- Using MetricKit histograms to claim a specific function is slow.
-- Running launch tests only on simulator or Debug builds.
-- Failing CI on tiny noise-level differences.
-- Measuring a launch path that depends on live network state.
-- Adding signposts with unstable names or private user data.
-- Processing MetricKit payloads synchronously during startup.
-- Optimizing based on averages while ignoring high-percentile users.
-- Forgetting to validate a launch fix with both local traces and production trends.
+* Treating resume time as launch time.
+* Comparing cold, warm, prewarmed, first install, post-update, and resume measurements as if they were interchangeable.
+* Treating a single local trace as a production conclusion.
+* Using MetricKit histograms to claim a specific function is slow.
+* Running launch tests only on simulator or Debug builds.
+* Measuring a path that depends on live network state without labeling it as such.
+* Failing CI for tiny noise-level differences.
+* Tracking averages while ignoring high-percentile users.
+* Processing MetricKit payloads synchronously during startup.
+* Adding signposts with unstable names or private user data.
+* Mixing optimized/prewarmed launch and ordinary launch in one dashboard.
+* Forgetting to verify a launch fix with both local evidence and field trends.
+* Rebaselining after a regression without a documented decision.
 
 ## Boundary With Other References
 
-This reference should stop at measurement, interpretation, and monitoring.
+This reference should stop at measurement, interpretation, validation, and monitoring.
 
-If the answer needs to explain how to reduce dyld cost, move static initialization, change linking strategy, defer AppDelegate work, restructure SwiftUI root setup, or change third-party SDK initialization, use the corresponding reference instead of expanding that guidance here.
+If the answer needs to explain how to reduce dyld cost, remove static initialization, change linking strategy, restructure launch steps, defer AppDelegate work, simplify SwiftUI root setup, or change SDK initialization policy, route to the corresponding reference instead of expanding that guidance here.
