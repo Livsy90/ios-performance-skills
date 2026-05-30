@@ -1,39 +1,42 @@
 # Progressive Rendering
 
-Use this reference when reviewing screens or flows that wait for all data before showing anything, clear existing content during refresh, delay critical content behind secondary content, or update the UI in one large final step.
+Use this reference when reviewing screens or flows that wait for all data before showing anything, delay primary content behind secondary content, clear existing content during refresh, or update the UI in one large final step.
+
+This reference is about revealing real content in stages. For placeholders, skeletons, progress indicators, loading copy, and loading/error transitions, read `references/loading-states.md`. For optimistic UI, read `references/optimistic-updates.md`. For high-stakes or irreversible flows, read `references/high-stakes-actions.md`. For broader runtime validation, read `references/validation-and-testing.md`.
 
 ## Core Idea
 
 Progressive rendering means presenting useful UI in stages instead of waiting for the entire screen to be ready.
 
-It can improve perceived performance because users see structure, feedback, or meaningful content earlier. It does not necessarily reduce total execution time. Treat it as a user-experience and state-modeling technique, not as a low-level optimization.
+It can improve perceived performance because users see structure, feedback, or meaningful content earlier. It does not necessarily reduce total execution time. Treat it as a product and state-modeling technique, not as a low-level optimization.
 
-The goal is to shorten the time until the user can understand or interact with the screen.
+The goal is to reduce the time until the user can understand the screen or start interacting with the most important content.
 
 ## What the Agent Can and Cannot Prove
 
 The agent can inspect and improve:
 
 * all-or-nothing loading states
-* state models that block the whole screen behind one request
-* refresh flows that clear useful content
 * screens where primary content could appear before secondary content
-* missing section-level loading or error states
 * code that waits for unrelated async operations before updating UI
-* UI models that cannot represent partial content
+* refresh flows that clear useful existing content
+* state models that cannot represent partial content
+* missing section-level loading, empty, or error states
+* UI updates that happen only after every dependency completes
 
-The agent cannot prove perceived improvement without runtime evidence.
+The agent cannot prove that the screen feels faster without runtime evidence.
 
 Do not claim:
 
 * “This will definitely feel faster.”
-* “This eliminates the performance issue.”
+* “This fixes the performance issue.”
 * “The screen is now responsive.”
 
 Prefer:
 
-* “This should reduce the time to first meaningful content.”
-* “Validate with a screen recording or tap-to-content timing.”
+* “This should reduce blank-screen time.”
+* “This lets primary content appear before secondary content.”
+* “Validate with a screen recording or tap-to-first-content timing.”
 * “This changes perceived latency, not necessarily total load time.”
 
 ## When Progressive Rendering Helps
@@ -44,9 +47,10 @@ Progressive rendering is useful when:
 * primary content is more important than secondary content
 * some data is available earlier than the rest
 * cached or stale content is useful during refresh
-* a user can start reading or interacting before all sections are complete
+* the user can start reading or interacting before all sections are complete
 * the current implementation shows a blank screen for too long
 * slow secondary content blocks the whole screen
+* partial failure can be shown inline without collapsing the whole flow
 
 Examples:
 
@@ -66,24 +70,31 @@ It may be wrong when:
 
 * partial content would mislead the user
 * all data must be consistent at the same point in time
-* business rules require server-confirmed completeness
-* the screen is small and loads fast enough
+* the product requires an atomic result
+* the screen is small and already loads quickly
 * staged rendering would cause layout jumps
 * partial errors would be harder to explain than a single error state
 * ordering is essential
-* the product requirement is an atomic result
+* the result must be server-confirmed before it is meaningful
 
-Examples where caution is needed:
+For financial, legal, destructive, irreversible, security-sensitive, or trust-sensitive flows, read `references/high-stakes-actions.md`.
 
-* financial confirmation screens
-* legal or consent screens
-* checkout totals
-* medical results
-* identity verification
-* security-sensitive settings
-* server-authoritative eligibility decisions
+## Review Workflow
 
-For these flows, prefer explicit progress and final confirmation over partial presentation.
+Before proposing progressive rendering, answer:
+
+1. What is the primary content?
+2. What can safely appear later?
+3. Which sections are independent?
+4. Which section failures should block the whole screen?
+5. Which section failures can be shown inline?
+6. Can existing content remain visible during refresh?
+7. Is stale content safe enough to show?
+8. Would staged updates cause layout jumps?
+9. Does the state model support partial content?
+10. Can the improvement be validated with tap-to-first-content timing or screen recording?
+
+If these questions cannot be answered from code, mark the missing product or design decision explicitly.
 
 ## All-or-Nothing Loading Smell
 
@@ -141,6 +152,8 @@ enum Loadable<Value> {
 
 The UI can render the screen shell and update sections independently.
 
+For deeper loading-state modeling, empty states, placeholders, and loading copy, read `references/loading-states.md`.
+
 ## Critical Content First
 
 Identify what the user needs first.
@@ -167,50 +180,51 @@ final class HomeModel {
     )
 
     func load() async {
-        state.headline = .loading
-        state.shortcuts = .loading
-        state.suggestions = .loading
-        state.activity = .loading
+        markAllSectionsAsLoading()
 
         await loadPrimaryContent()
         await loadSecondaryContent()
     }
 
+    private func markAllSectionsAsLoading() {
+        state.headline = .loading
+        state.shortcuts = .loading
+        state.suggestions = .loading
+        state.activity = .loading
+    }
+
     private func loadPrimaryContent() async {
-        async let headline = loadHeadlineSection()
-        async let shortcuts = loadShortcutsSection()
+        async let headline: Void = loadHeadlineSection()
+        async let shortcuts: Void = loadShortcutsSection()
 
         _ = await (headline, shortcuts)
     }
 
     private func loadSecondaryContent() async {
-        async let suggestions = loadSuggestionsSection()
-        async let activity = loadActivitySection()
+        async let suggestions: Void = loadSuggestionsSection()
+        async let activity: Void = loadActivitySection()
 
         _ = await (suggestions, activity)
     }
-}
-```
 
-Each section loader should update only its own state.
-
-```swift
-@MainActor
-private func loadHeadlineSection() async {
-    do {
-        let value = try await service.loadHeadline()
-        state.headline = .loaded(value)
-    } catch {
-        state.headline = .failed(error)
+    private func loadHeadlineSection() async {
+        do {
+            let value = try await service.loadHeadline()
+            state.headline = .loaded(value)
+        } catch {
+            state.headline = .failed(error)
+        }
     }
 }
 ```
 
 This lets critical UI appear earlier without blocking on every secondary dependency.
 
+Use this pattern only when primary and secondary sections are independent enough to load and fail separately.
+
 ## Section-Level Errors
 
-A progressive screen needs section-level failure handling.
+A progressive screen needs section-level failure boundaries.
 
 Risky:
 
@@ -225,10 +239,9 @@ do {
 
 One secondary failure can collapse the whole screen.
 
-Prefer explicit failure boundaries when partial content is acceptable:
+Prefer explicit section failure when partial content is acceptable:
 
 ```swift
-@MainActor
 private func loadSuggestionsSection() async {
     do {
         let suggestions = try await service.loadSuggestions()
@@ -272,7 +285,6 @@ enum ListState {
     case failed(Error)
 }
 
-@MainActor
 func refresh() async {
     guard case .loaded(let items, _) = state else {
         await loadInitial()
@@ -301,6 +313,8 @@ Use stale content carefully when:
 * data is financial, medical, legal, or security-sensitive
 * the user needs server-confirmed freshness
 * stale content should be visually marked
+
+For broader loading, refreshing, and error-state transitions, read `references/loading-states.md`.
 
 ## Partial UI Updates
 
@@ -346,76 +360,42 @@ final class DetailsModel {
 
         _ = await (header, badges, timeline, promotions)
     }
+
+    private func loadHeader() async {
+        do {
+            let header = try await service.loadHeader()
+            state.header = .loaded(header)
+        } catch {
+            state.header = .failed(error)
+        }
+    }
+
+    private func loadPromotions() async {
+        do {
+            let promotions = try await service.loadPromotions()
+            state.promotions = promotions.isEmpty
+                ? .empty
+                : .loaded(promotions)
+        } catch {
+            state.promotions = .failed(error)
+        }
+    }
 }
 ```
 
 Use `async let` here because the set of sections is small and fixed, and the section loads belong to the lifetime of `loadDetails()`.
 
-Each section loader should update only its own state:
-
-```swift
-private func loadHeader() async {
-    do {
-        let header = try await service.loadHeader()
-        state.header = .loaded(header)
-    } catch {
-        state.header = .failed(error)
-    }
-}
-
-private func loadPromotions() async {
-    do {
-        let promotions = try await service.loadPromotions()
-        state.promotions = promotions.isEmpty
-            ? .empty
-            : .loaded(promotions)
-    } catch {
-        state.promotions = .failed(error)
-    }
-}
-```
-
-This lets primary content appear as soon as it is ready while slower secondary sections continue loading.
-
 Use a task group when the number of sections is dynamic.
 
 Use stored `Task {}` only when the work is intentionally owned by the screen or model lifetime and must be cancelled externally, such as when loading is started from a synchronous method or must be cancelled on disappearance.
 
-```swift
-@MainActor
-final class DetailsModel {
-    private var loadingTasks: [Task<Void, Never>] = []
-
-    func startLoading() {
-        cancelLoading()
-
-        state.header = .loading
-        state.badges = .loading
-        state.timeline = .loading
-        state.promotions = .loading
-
-        loadingTasks = [
-            Task { await loadHeader() },
-            Task { await loadBadges() },
-            Task { await loadTimeline() },
-            Task { await loadPromotions() }
-        ]
-    }
-
-    func cancelLoading() {
-        loadingTasks.forEach { $0.cancel() }
-        loadingTasks.removeAll()
-    }
-}
-```
-
 Do not use unstructured `Task {}` merely to make section loading parallel. Prefer structured concurrency when all child work belongs to one async scope.
 
-## Avoid Layout Jumps
+## Stable Layout During Staged Updates
 
 Progressive rendering can feel worse if every section changes size after loading.
 
-Review whether placeholders reserve stable space.
+Review whether the UI reserves stable space for expected sections.
 
 Risky:
 
@@ -427,13 +407,13 @@ if let banner {
 
 If the banner appears late and pushes content down, the screen may jump.
 
-Prefer reserving a stable region when the section is expected:
+Prefer a stable region when the section is expected:
 
 ```swift
 BannerContainer {
     switch state.banner {
     case .loading:
-        BannerPlaceholder()
+        BannerLoadingView()
     case .loaded(let banner):
         BannerView(banner)
     case .empty:
@@ -441,48 +421,29 @@ BannerContainer {
     case .failed:
         BannerRetryView()
     case .idle:
-        BannerPlaceholder()
+        BannerLoadingView()
     }
 }
 ```
 
 The exact UI depends on design, but the principle is stable layout during staged updates.
 
-## Progressive Rendering vs Skeletons
+For skeletons, placeholders, loading copy, and empty-state presentation, read `references/loading-states.md`.
 
-Progressive rendering and skeletons solve different problems.
+## Duplicate Loads and Cancellation
 
-Progressive rendering shows real content as soon as it is available.
-
-Skeletons show structure while content is unavailable.
-
-Prefer real content over skeletons when useful content already exists or can arrive early.
-
-Use skeletons when:
-
-* no meaningful content is available yet
-* the screen structure is predictable
-* the placeholder reduces uncertainty
-* it does not create misleading expectations
-* it does not cause layout shifts
-
-Do not use skeletons to hide poor state modeling. If content can be loaded in independent sections, section-level rendering may be better.
-
-## Accessibility and State Communication
-
-Progressive rendering should not make the screen confusing.
+Progressive rendering often creates more independent loading paths. Make sure this does not create duplicate work or abandoned tasks.
 
 Check:
 
-* Does VoiceOver receive meaningful state changes?
-* Are loading states announced when appropriate?
-* Does focus jump unexpectedly as sections appear?
-* Are retry controls reachable?
-* Are placeholders distinguishable from real content?
-* Are error states clear at section level?
-* Does preserving stale content make freshness ambiguous?
+* Can the same section load be started twice?
+* What happens when the screen disappears?
+* What happens when refresh starts while initial loading is still running?
+* Are owner-scoped tasks stored and cancelled?
+* Are structured child tasks preferred when work belongs to one async call?
+* Are section-level loaders idempotent or protected from duplicate requests?
 
-When content is stale or refreshing, communicate that state visually and, when appropriate, accessibly.
+Keep detailed task-lifetime and structured-concurrency guidance in the concurrency skill or related references. In this reference, focus only on how task lifetime affects staged UI updates.
 
 ## Implementation Checklist
 
@@ -494,29 +455,26 @@ When proposing progressive rendering, check:
 * [ ] Does the state model support section-level loading?
 * [ ] Can existing content remain visible during refresh?
 * [ ] Are partial errors handled without collapsing the whole screen?
-* [ ] Are empty states distinct from loading states?
-* [ ] Is stale content safe to show?
+* [ ] Is stale content safe enough to show during refresh?
 * [ ] Is layout stable while sections update?
-* [ ] Are async tasks cancelled when the screen disappears?
+* [ ] Are fixed section loads structured with `async let`?
+* [ ] Is `TaskGroup` used when the number of sections is dynamic?
+* [ ] Are owner-scoped tasks stored and cancelled if unstructured tasks are necessary?
 * [ ] Are duplicate loads avoided?
-* [ ] Is accessibility considered?
 * [ ] Is the perceived improvement validated with runtime evidence?
 
 ## Validation
 
-Use validation that reflects user perception.
+Validate progressive rendering with evidence that reflects user perception.
 
-Recommended validation:
+Recommended validation for this reference:
 
-* screen recording from tap to first visible feedback
+* screen recording from tap to first meaningful content
 * time to first meaningful content
 * time until primary action becomes available
 * repeated refresh attempts
 * slow network testing
-* release build testing
-* older device testing when available
-* Instruments when UI stalls or hitches are suspected
-* production metrics when the issue appears in the wild
+* inspection for layout jumps during staged updates
 
 Do not claim that progressive rendering improved performance unless there is evidence.
 
@@ -531,6 +489,8 @@ Avoid:
 * “This makes the screen faster.”
 * “This fixes performance.”
 * “This guarantees better UX.”
+
+For older-device testing, Low Power Mode, release builds, Instruments, production signals, and broader responsiveness validation, read `references/validation-and-testing.md`.
 
 ## Review Output Guidance
 
