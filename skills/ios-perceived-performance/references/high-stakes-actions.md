@@ -327,43 +327,39 @@ Do not collapse pending into success unless the product explicitly defines pendi
 
 ## Failure Recovery
 
-High-stakes failure states should be clear and safe.
+High-stakes failure states should be clear, specific, and safe.
 
 A failure state should explain:
 
-* whether the action happened
-* whether the user should retry
+* whether the request was rejected
+* whether the final status is unknown
+* whether the user can retry safely
 * whether retry could duplicate the operation
-* whether the user should contact support
-* whether the app will continue processing in the background
-* whether the local state is unchanged
+* whether the user should check transaction history, activity, or status details
+* whether support or manual review may be needed
 
-Risky:
+Avoid generic copy:
 
 ```swift
 state = .failed(error)
 errorPresenter.show("Something went wrong")
 ```
 
-Prefer domain-specific recovery:
+Prefer domain-specific recovery that reflects the real backend result:
 
 ```swift
 state = .failed(
     TransferErrorPresentation(
-        title: "Transfer was not confirmed",
-        message: "No money was moved. Check your connection and try again.",
+        title: "Transfer could not be completed",
+        message: "Please review the details and try again.",
         canRetry: true
     )
 )
 ```
 
-Only say “No money was moved” if the backend contract guarantees it. If the result is unknown, say so:
+Use this only when the backend clearly rejected the operation or confirmed that it was not completed.
 
-```text
-We could not confirm the transfer status. Please check your activity before trying again.
-```
-
-Do not encourage retry when the operation might already have been submitted unless the backend is idempotent or the app can verify the result safely.
+Do not encourage retry when the operation may already have been submitted unless the backend is idempotent or the app can verify the result safely.
 
 ## Unknown Outcome
 
@@ -420,7 +416,7 @@ Review:
 
 For low-risk reversible deletion, optimistic removal with undo may be acceptable.
 
-For irreversible deletion, prefer confirmation and final success only after the server confirms.
+For irreversible deletion, prefer an explicit confirmation step before starting the operation, and show final success only after the server confirms.
 
 Risky:
 
@@ -435,22 +431,60 @@ func deleteWorkspace(id: Workspace.ID) {
 }
 ```
 
-Prefer:
+This removes the workspace locally before the authoritative deletion result is known. If the request fails, times out, or returns an unknown status, the UI has already presented the destructive action as complete.
+
+Prefer separating intent, confirmation, progress, and final result:
+
+```swift
+enum WorkspaceDeletionState {
+    case idle
+    case confirming(id: Workspace.ID)
+    case deleting(id: Workspace.ID)
+    case deleted(id: Workspace.ID)
+    case failed(id: Workspace.ID, Error)
+}
+```
 
 ```swift
 @MainActor
-func deleteWorkspace(id: Workspace.ID) async {
-    state = .deleting(id)
+func requestWorkspaceDeletion(id: Workspace.ID) {
+    state = .confirming(id: id)
+}
+```
+
+The UI can present a confirmation prompt such as:
+
+```text
+Are you sure you want to delete this workspace?
+This action cannot be undone.
+```
+
+Only after the user confirms should the app start the destructive operation:
+
+```swift
+@MainActor
+func confirmWorkspaceDeletion(id: Workspace.ID) async {
+    state = .deleting(id: id)
 
     do {
         try await workspaceService.delete(id)
         workspaces.remove(id)
-        state = .deleted
+        state = .deleted(id: id)
     } catch {
-        state = .failedDeletion(id, error)
+        state = .failed(id: id, error)
     }
 }
 ```
+
+If deletion fails, keep the item visible or restore it from a known local snapshot. Do not present the item as permanently deleted until the server confirms the result.
+
+For destructive actions, the confirmation copy should be specific:
+
+* name what will be deleted
+* explain whether the action is reversible
+* avoid vague prompts like “Are you sure?” without context
+* use destructive styling for the final confirmation action when the platform supports it
+* prevent repeated submission while deletion is in progress
 
 ## Security-Sensitive Changes
 
